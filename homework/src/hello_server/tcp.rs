@@ -1,6 +1,6 @@
 //! TcpListener that can be cancelled.
 
-use std::io;
+use std::{borrow::Borrow, io};
 use std::net::ToSocketAddrs;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,7 +38,13 @@ impl CancellableTcpListener {
     pub fn cancel(&self) -> io::Result<()> {
         // Set the flag first and make a bogus connection to itself to wake up the listener blocked
         // in `accept`. Use `TcpListener::local_addr` and `TcpStream::connect`.
-        todo!()
+        
+        // TODO: Give correct ordering
+        self.is_canceled.swap(true, Ordering::Release);
+        
+        // TODO: Should I do something Else here?
+        let _streamer = TcpStream::connect(self.inner.local_addr()?)?;
+        Ok(())
     }
 
     /// Returns an iterator over the connections being received on this listener.  The returned
@@ -53,7 +59,11 @@ impl<'a> Iterator for Incoming<'a> {
     /// Returns None if the listener is `cancel()`led.
     fn next(&mut self) -> Option<io::Result<TcpStream>> {
         let stream: io::Result<TcpStream> = self.listener.inner.accept().map(|p| p.0);
-        todo!()
+        if self.listener.is_canceled.load(Ordering::Acquire) {
+            return None
+        } else {
+            return Some(stream)
+        }
     }
 }
 
@@ -70,6 +80,7 @@ mod test {
     #[test]
     fn cancellable_listener_cancel() {
         let mut port = 23456;
+        println!("Test is running");
         let (addr, listener) = loop {
             let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
             if let Ok(listener) = CancellableTcpListener::bind(&addr) {
@@ -78,10 +89,13 @@ mod test {
             port += 1;
         };
 
+        println!("Test created Socket Addr");
+
         let (done_sender, done_receiver) = bounded(0);
         scope(|s| {
             s.spawn(|_| {
                 for stream in listener.incoming() {
+                    print!("Listened first request");
                     let mut stream = stream.unwrap();
                     let mut buf = [0];
                     stream.read(&mut buf).unwrap();
