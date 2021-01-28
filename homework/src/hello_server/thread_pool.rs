@@ -4,9 +4,10 @@
 
 // NOTE: Crossbeam channels are MPMC, which means that you don't need to wrap the receiver in
 // Arc<Mutex<..>>. Just clone the receiver and give it to each worker thread.
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use thread::JoinHandle;
 
 struct Job(Box<dyn FnOnce() + Send + 'static>);
 
@@ -20,7 +21,9 @@ impl Drop for Worker {
     /// When dropped, the thread's `JoinHandle` must be `join`ed.  If the worker panics, then this
     /// function should panic too.  NOTE: that the thread is detached if not `join`ed explicitly.
     fn drop(&mut self) {
-        todo!()
+        let join_handler = self.thread.take().unwrap();
+        join_handler.join().unwrap();
+        self.thread = None;
     }
 }
 
@@ -35,12 +38,16 @@ struct ThreadPoolInner {
 impl ThreadPoolInner {
     /// Increment the job count.
     fn start_job(&self) {
-        todo!()
+        let mut job_count = self.job_count.lock().unwrap();
+        (*job_count) += 1;
+        drop(job_count);
     }
 
     /// Decrement the job count.
     fn finish_job(&self) {
-        todo!()
+        let mut job_count = self.job_count.lock().unwrap();
+        (*job_count) -= 1;
+        drop(job_count);
     }
 
     /// Wait until the job count becomes 0.
@@ -48,7 +55,13 @@ impl ThreadPoolInner {
     /// NOTE: We can optimize this function by adding another field to `ThreadPoolInner`, but let's
     /// not care about that in this homework.
     fn wait_empty(&self) {
-        todo!()
+        let mut job_count = self.job_count.lock().unwrap();
+        while (*job_count) != 0 {
+            let _job_count = self.empty_condvar.wait(job_count).unwrap();
+            job_count = self.job_count.lock().unwrap();
+            println!("Job count is: {:?}", job_count);
+        }
+        println!("Finalized count is: {:?}", job_count);
     }
 }
 
@@ -65,7 +78,28 @@ impl ThreadPool {
     pub fn new(size: usize) -> Self {
         assert!(size > 0);
 
-        todo!()
+        let (sender, receiver) = unbounded();
+        let shared_data = Arc::new(ThreadPoolInner::default());
+        let vec_workers = {
+            let mut vec_workers = vec![];
+            for i in 0..size {
+                vec_workers.push(Worker {
+                    id: i,
+                    thread: Some(thread_spawn_pool(
+                        receiver.clone(),
+                        shared_data.clone(),
+                        i.to_owned(),
+                        size,
+                    )),
+                });
+            }
+            vec_workers
+        };
+        ThreadPool {
+            workers: vec_workers,
+            job_sender: Some(sender),
+            pool_inner: shared_data,
+        }
     }
 
     /// Execute a new job in the thread pool.
@@ -73,13 +107,32 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        todo!()
+        // Inrease the job counter
+        let mut job_count = self.pool_inner.job_count.lock().unwrap();
+        (*job_count) += 1;
+        println!("------Increased job count to: {:?}-----", job_count);
+
+        // Send the job to initiate
+        self.job_sender
+            .as_ref()
+            .unwrap()
+            .send(Job(Box::new(f)))
+            .expect("Failed to initiate the job");
     }
 
     /// Block the current thread until all jobs in the pool have been executed.  NOTE: This method
     /// has nothing to do with `JoinHandle::join`.
     pub fn join(&self) {
-        todo!()
+
+        // Wait until all workers are done
+        for worker in self.workers.iter() {
+            drop(worker);
+        }
+
+        println!("All tasks are dropped");
+        self.pool_inner.as_ref().wait_empty();
+
+        println!("All workers are dropped");
     }
 }
 
@@ -87,12 +140,59 @@ impl Drop for ThreadPool {
     /// When dropped, all worker threads' `JoinHandle` must be `join`ed. If the thread panicked,
     /// then this function should panic too.
     fn drop(&mut self) {
-        todo!()
+        // Drop the sender
+        let sender = self.job_sender.take().unwrap();
+        drop(sender);
+
+        // Wait until all workers are done
+        for worker in self.workers.iter_mut() {
+            drop(worker);
+        }
     }
 }
 
+fn thread_spawn_pool(
+    recv: Receiver<Job>,
+    shared_data: Arc<ThreadPoolInner>,
+    id: usize,
+    max_size: usize,
+) -> JoinHandle<()> {
+    let mut builder = thread::Builder::new();
+    builder = builder.name(id.to_string());
+    println!("Created a new thread");
+
+    builder
+        .spawn(move || {
+            loop {
+                println!("Created thread pool id is: {:?}", id);
+                let message = recv.recv();
+
+                let job = match message {
+                    Ok(Job(job)) => job,
+                    // The ThreadPool was dropped.
+                    Err(..) => break,
+                };
+
+                shared_data.as_ref().start_job();
+
+                // Process the job
+                job();
+
+                shared_data.as_ref().finish_job();
+
+                // Inform about the end of the job
+                let value = shared_data.as_ref().job_count.lock().unwrap();
+                if (*value) > 0 {
+                    shared_data.as_ref().empty_condvar.notify_all();
+                }
+                drop(value);
+            }
+        })
+        .unwrap()
+}
+
 #[cfg(test)]
-mod test {
+mod thread_test {
     use super::ThreadPool;
     use crossbeam_channel::bounded;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -101,11 +201,12 @@ mod test {
     use std::time::Duration;
 
     const NUM_THREADS: usize = 4;
-    const NUM_JOBS: usize = 1024;
+    const NUM_JOBS: usize = 14;
 
     #[test]
     fn thread_pool_parallel() {
         let pool = ThreadPool::new(NUM_THREADS);
+        println!("Created a thread pool");
         let barrier = Arc::new(Barrier::new(NUM_THREADS));
         let (done_sender, done_receiver) = bounded(NUM_THREADS);
         for _ in 0..NUM_THREADS {

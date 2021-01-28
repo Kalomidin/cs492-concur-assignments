@@ -1,8 +1,19 @@
 //! Thead-safe key/value cache.
 
-use std::collections::hash_map::{Entry, HashMap};
+use crossbeam_channel::{bounded, Receiver};
+use crossbeam_utils::thread::scope;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, RwLock};
+use std::{
+    borrow::Borrow,
+    clone,
+    collections::hash_map::{Entry, HashMap},
+    hash,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        MutexGuard,
+    },
+};
 
 /// Cache that remembers the result for each key.
 #[derive(Debug, Default)]
@@ -16,7 +27,7 @@ impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
     /// Retrieve the value or insert a new one created by `f`.
     ///
     /// An invocation to this function should not block another invocation with a different key.
-    /// For exmaple, if a thread calls `get_or_insert_with(key1, f1)` and another thread calls
+    /// For example, if a thread calls `get_or_insert_with(key1, f1)` and another thread calls
     /// `get_or_insert_with(key2, f2)` (`key1≠key2`, `key1,key2∉cache`) concurrently, `f1` and `f2`
     /// should run concurrently.
     ///
@@ -24,12 +35,26 @@ impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
     /// duplicate the work. That is, `f` should be run only once for each key. Specifically, even
     /// for the concurrent invocations of `get_or_insert_with(key, f)`, `f` is called only once.
     pub fn get_or_insert_with<F: FnOnce(K) -> V>(&self, key: K, f: F) -> V {
-        todo!()
+        let hash_map = self.inner.lock().unwrap();
+
+        match (*hash_map).get(&key) {
+            Some(value) => value.clone(),
+            None => {
+                drop(hash_map);
+
+                let value = f(key.clone());
+
+                let mut hashmap = self.inner.lock().unwrap();
+                (*hashmap).insert(key, value.clone());
+
+                return value;
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod test {
+mod cache_test {
     use super::Cache;
     use crossbeam_channel::bounded;
     use crossbeam_utils::thread::scope;
