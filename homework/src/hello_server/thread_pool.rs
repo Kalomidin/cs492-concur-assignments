@@ -59,9 +59,7 @@ impl ThreadPoolInner {
         while (*job_count) != 0 {
             let _job_count = self.empty_condvar.wait(job_count).unwrap();
             job_count = self.job_count.lock().unwrap();
-            println!("Job count is: {:?}", job_count);
         }
-        println!("Finalized count is: {:?}", job_count);
     }
 }
 
@@ -110,7 +108,6 @@ impl ThreadPool {
         // Inrease the job counter
         let mut job_count = self.pool_inner.job_count.lock().unwrap();
         (*job_count) += 1;
-        println!("------Increased job count to: {:?}-----", job_count);
 
         // Send the job to initiate
         self.job_sender
@@ -129,10 +126,7 @@ impl ThreadPool {
             drop(worker);
         }
 
-        println!("All tasks are dropped");
         self.pool_inner.as_ref().wait_empty();
-
-        println!("All workers are dropped");
     }
 }
 
@@ -159,12 +153,10 @@ fn thread_spawn_pool(
 ) -> JoinHandle<()> {
     let mut builder = thread::Builder::new();
     builder = builder.name(id.to_string());
-    println!("Created a new thread");
 
     builder
         .spawn(move || {
             loop {
-                println!("Created thread pool id is: {:?}", id);
                 let message = recv.recv();
 
                 let job = match message {
@@ -206,7 +198,6 @@ mod thread_test {
     #[test]
     fn thread_pool_parallel() {
         let pool = ThreadPool::new(NUM_THREADS);
-        println!("Created a thread pool");
         let barrier = Arc::new(Barrier::new(NUM_THREADS));
         let (done_sender, done_receiver) = bounded(NUM_THREADS);
         for _ in 0..NUM_THREADS {
