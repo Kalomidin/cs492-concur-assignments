@@ -56,6 +56,7 @@ impl ThreadPoolInner {
     /// not care about that in this homework.
     fn wait_empty(&self) {
         let mut job_count = self.job_count.lock().unwrap();
+        
         while (*job_count) != 0 {
             let _job_count = self.empty_condvar.wait(job_count).unwrap();
             job_count = self.job_count.lock().unwrap();
@@ -120,12 +121,7 @@ impl ThreadPool {
     /// Block the current thread until all jobs in the pool have been executed.  NOTE: This method
     /// has nothing to do with `JoinHandle::join`.
     pub fn join(&self) {
-
-        // Wait until all workers are done
-        for worker in self.workers.iter() {
-            drop(worker);
-        }
-
+        // TODO: This is not valid I guess??
         self.pool_inner.as_ref().wait_empty();
     }
 }
@@ -174,9 +170,8 @@ fn thread_spawn_pool(
 
                 // Inform about the end of the job
                 let value = shared_data.as_ref().job_count.lock().unwrap();
-                if (*value) > 0 {
-                    shared_data.as_ref().empty_condvar.notify_all();
-                }
+                
+                shared_data.as_ref().empty_condvar.notify_all();
                 drop(value);
             }
         })
