@@ -5,7 +5,7 @@
 // NOTE: Crossbeam channels are MPMC, which means that you don't need to wrap the receiver in
 // Arc<Mutex<..>>. Just clone the receiver and give it to each worker thread.
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::{iter, sync::{Arc, Condvar, Mutex}};
 use std::thread;
 use thread::JoinHandle;
 
@@ -56,11 +56,14 @@ impl ThreadPoolInner {
     /// not care about that in this homework.
     fn wait_empty(&self) {
         let mut job_count = self.job_count.lock().unwrap();
-        
+        let mut iter_count = 0;
         while (*job_count) != 0 {
-            let _job_count = self.empty_condvar.wait(job_count).unwrap();
-            job_count = self.job_count.lock().unwrap();
+            println!("It is inside the loop and job count is: {:?}, iteration: {:?}", job_count, iter_count);
+            job_count = self.empty_condvar.wait(job_count).unwrap();
+            iter_count += 1;
+            //job_count = self.job_count.lock().unwrap();
         }
+        println!("It has finished loop");
     }
 }
 
@@ -106,9 +109,6 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        // Inrease the job counter
-        let mut job_count = self.pool_inner.job_count.lock().unwrap();
-        (*job_count) += 1;
 
         // Send the job to initiate
         self.job_sender
@@ -121,7 +121,8 @@ impl ThreadPool {
     /// Block the current thread until all jobs in the pool have been executed.  NOTE: This method
     /// has nothing to do with `JoinHandle::join`.
     pub fn join(&self) {
-        // TODO: This is not valid I guess??
+        let sender = self.job_sender.as_ref().unwrap();
+        while sender.len() != 0 {};
         self.pool_inner.as_ref().wait_empty();
     }
 }
@@ -167,12 +168,8 @@ fn thread_spawn_pool(
                 job();
 
                 shared_data.as_ref().finish_job();
-
-                // Inform about the end of the job
-                let value = shared_data.as_ref().job_count.lock().unwrap();
                 
                 shared_data.as_ref().empty_condvar.notify_all();
-                drop(value);
             }
         })
         .unwrap()
@@ -188,7 +185,7 @@ mod thread_test {
     use std::time::Duration;
 
     const NUM_THREADS: usize = 4;
-    const NUM_JOBS: usize = 14;
+    const NUM_JOBS: usize = 24;
 
     #[test]
     fn thread_pool_parallel() {

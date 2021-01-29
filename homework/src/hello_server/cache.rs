@@ -20,7 +20,7 @@ use std::{
 pub struct Cache<K, V> {
     // todo! This is an example cache type. Build your own cache type that satisfies the
     // specification for `get_or_insert_with`.
-    inner: Mutex<HashMap<K, V>>,
+    inner: Arc<Mutex<HashMap<K, Option<V>>>>,
 }
 
 impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
@@ -35,19 +35,32 @@ impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
     /// duplicate the work. That is, `f` should be run only once for each key. Specifically, even
     /// for the concurrent invocations of `get_or_insert_with(key, f)`, `f` is called only once.
     pub fn get_or_insert_with<F: FnOnce(K) -> V>(&self, key: K, f: F) -> V {
-        let hash_map = self.inner.lock().unwrap();
-        //let hashmap = Box::new(&hash_map);
+        let mut hash_map = self.inner.lock().unwrap();
         match (*hash_map).get(&key) {
-            Some(value) => value.clone(),
-            None => {
+            Some(_value) => {
+
+                // TODO: Avoid the drop
+                drop(hash_map);
                 
+                loop {
+
+                    let hash_map = self.inner.lock().unwrap();
+
+                    match (*hash_map).get(&key).unwrap() {
+                            Some(value) => return value.clone(),
+                            None => (),
+                        }
+                    drop(hash_map);
+                }
+            },
+            None => {
+                hash_map.insert(key.clone(), None);
                 drop(hash_map);
 
-                //let result = Box::leak(hashmap);
                 let value = f(key.clone());
 
                 let mut hashmap = self.inner.lock().unwrap();
-                (*hashmap).insert(key, value.clone());
+                (*hashmap).insert(key, Some(value.clone()));
 
                 return value;
             }
