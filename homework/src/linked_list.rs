@@ -5,6 +5,8 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 
+use fmt::Debug;
+
 /// A doubly-linked list with owned nodes.
 ///
 /// The `LinkedList` allows pushing and popping elements at either end
@@ -152,13 +154,41 @@ impl<T> LinkedList<T> {
     /// Adds the given node to the back of the list.
     #[inline]
     fn push_back_node(&mut self, mut node: Box<Node<T>>) {
-        todo!()
+        unsafe {
+            node.prev = self.tail;
+            node.next = ptr::null_mut();
+
+            let node = Box::into_raw(node);
+
+            if self.tail.is_null() {
+                self.head = node;
+            } else {
+                (*self.tail).next = node;
+            }
+
+            self.tail = node;
+            self.len += 1;
+        }
     }
 
     /// Removes and returns the node at the back of the list.
     #[inline]
     fn pop_back_node(&mut self) -> Option<Box<Node<T>>> {
-        todo!()
+        if self.tail.is_null() {
+            return None;
+        }
+        unsafe {
+            let node = Box::from_raw(self.tail);
+            self.tail = node.prev;
+
+            if self.tail.is_null() {
+                self.head = ptr::null_mut();
+            } else {
+                (*self.tail).next = ptr::null_mut();
+            }
+            self.len -= 1;
+            Some(node)
+        }
     }
 }
 
@@ -265,7 +295,19 @@ impl<T> LinkedList<T> {
     /// assert!(list1.is_empty());
     /// ```
     pub fn prepend(&mut self, other: &mut Self) {
-        todo!()
+        if self.head.is_null() {
+            mem::swap(self, other);
+        } else {
+            let other_tail = mem::replace(&mut other.tail, ptr::null_mut());
+            if !other_tail.is_null() {
+                unsafe {
+                    (*self.head).prev = other_tail;
+                    (*other_tail).next = self.head;
+                }
+                self.head = mem::replace(&mut other.head, ptr::null_mut());
+                self.len += mem::replace(&mut other.len, 0);
+            }
+        }
     }
 
     /// Provides a forward iterator.
@@ -484,7 +526,7 @@ impl<T> LinkedList<T> {
     /// ```
     #[inline]
     pub fn back(&self) -> Option<&T> {
-        todo!()
+        unsafe { self.tail.as_ref().map(|node| &node.element) }
     }
 
     /// Provides a mutable reference to the back element, or `None` if the list
@@ -530,7 +572,12 @@ impl<T> LinkedList<T> {
     /// assert_eq!(dl.front().unwrap(), &1);
     /// ```
     pub fn push_front(&mut self, elt: T) {
-        todo!()
+        let node = Node {
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
+            element: elt,
+        };
+        self.push_front_node(Box::new(node));
     }
 
     /// Removes the first element and returns it, or `None` if the list is
@@ -638,18 +685,36 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<&'a mut T> {
-        todo!()
+        if self.len == 0 {
+            None
+        } else {
+            unsafe {
+                self.head.as_mut().map(|node| {
+                    self.len -= 1;
+                    self.head = node.next;
+                    &mut node.element
+                })
+            }
+        }
     }
 }
 
 impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut T> {
-        todo!()
+        if self.len == 0 {
+            None
+        } else {
+            unsafe { self.tail.as_mut() }.map(|node| {
+                self.len -= 1;
+                self.tail = node.prev;
+                &mut node.element
+            })
+        }
     }
 }
 
-impl<T> IterMut<'_, T> {
+impl<T: Debug> IterMut<'_, T> {
     /// Inserts the given element just after the element most recently returned by `.next()`.
     /// The inserted element does not appear in the iteration.
     ///
@@ -674,7 +739,46 @@ impl<T> IterMut<'_, T> {
     /// ```
     #[inline]
     pub fn insert_next(&mut self, element: T) {
-        todo!()
+        if self.len != 0 {
+            unsafe {
+                println!(
+                    "Inserted value is: {:?} and the element of the head: {:?}",
+                    element,
+                    (*self.head).element
+                );
+            }
+        }
+        let mut node = Box::new(Node::new(element));
+        unsafe {
+            node.next = self.head;
+            node.prev = if self.head.is_null() {
+                if self.tail.is_null() {
+                    ptr::null_mut()
+                } else {
+                    self.tail
+                }
+            } else {
+                (*self.head).prev
+            };
+            let node = Box::into_raw(node);
+
+            self.list.len += 1;
+            self.len += 1;
+            if self.head.is_null() {
+                (*self.tail).next = node;
+            } else {
+                if !(*self.head).prev.is_null() {
+                    let mut new_node = mem::replace(&mut (*self.head).prev, ptr::null_mut());
+                    (*new_node).next = node;
+                } else {
+                    (*self.list.head).prev = node;
+                    self.list.head = node;
+                }
+                (*self.head).prev = node;
+            }
+            self.head = node;
+            self.next();
+        }
     }
 
     /// Provides a reference to the next element, without changing the iterator.
@@ -694,7 +798,11 @@ impl<T> IterMut<'_, T> {
     /// ```
     #[inline]
     pub fn peek_next(&mut self) -> Option<&mut T> {
-        todo!()
+        if self.len == 0 {
+            None
+        } else {
+            unsafe { self.head.as_mut() }.map(|node| &mut node.element)
+        }
     }
 }
 

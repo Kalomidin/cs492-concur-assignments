@@ -38,21 +38,19 @@ impl<K: Eq + Hash + Clone, V: Clone> Cache<K, V> {
         let mut hash_map = self.inner.lock().unwrap();
         match (*hash_map).get(&key) {
             Some(_value) => {
-
                 // TODO: Avoid the drop
                 drop(hash_map);
-                
-                loop {
 
+                loop {
                     let hash_map = self.inner.lock().unwrap();
 
                     match (*hash_map).get(&key).unwrap() {
-                            Some(value) => return value.clone(),
-                            None => (),
-                        }
+                        Some(value) => return value.clone(),
+                        None => (),
+                    }
                     drop(hash_map);
                 }
-            },
+            }
             None => {
                 hash_map.insert(key.clone(), None);
                 drop(hash_map);

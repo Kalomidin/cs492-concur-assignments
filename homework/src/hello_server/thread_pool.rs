@@ -5,8 +5,11 @@
 // NOTE: Crossbeam channels are MPMC, which means that you don't need to wrap the receiver in
 // Arc<Mutex<..>>. Just clone the receiver and give it to each worker thread.
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use std::{iter, sync::{Arc, Condvar, Mutex}};
 use std::thread;
+use std::{
+    iter,
+    sync::{Arc, Condvar, Mutex},
+};
 use thread::JoinHandle;
 
 struct Job(Box<dyn FnOnce() + Send + 'static>);
@@ -58,7 +61,10 @@ impl ThreadPoolInner {
         let mut job_count = self.job_count.lock().unwrap();
         let mut iter_count = 0;
         while (*job_count) != 0 {
-            println!("It is inside the loop and job count is: {:?}, iteration: {:?}", job_count, iter_count);
+            println!(
+                "It is inside the loop and job count is: {:?}, iteration: {:?}",
+                job_count, iter_count
+            );
             job_count = self.empty_condvar.wait(job_count).unwrap();
             iter_count += 1;
             //job_count = self.job_count.lock().unwrap();
@@ -109,7 +115,6 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-
         // Send the job to initiate
         self.job_sender
             .as_ref()
@@ -122,7 +127,7 @@ impl ThreadPool {
     /// has nothing to do with `JoinHandle::join`.
     pub fn join(&self) {
         let sender = self.job_sender.as_ref().unwrap();
-        while sender.len() != 0 {};
+        while sender.len() != 0 {}
         self.pool_inner.as_ref().wait_empty();
     }
 }
@@ -168,7 +173,7 @@ fn thread_spawn_pool(
                 job();
 
                 shared_data.as_ref().finish_job();
-                
+
                 shared_data.as_ref().empty_condvar.notify_all();
             }
         })
