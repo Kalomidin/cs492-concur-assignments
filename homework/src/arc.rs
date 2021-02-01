@@ -2,7 +2,8 @@
 //!
 //! See the `Arc` documentation for more details and specification.
 
-use std::fmt;
+use core::panic;
+use std::{borrow::Borrow, fmt};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -91,14 +92,20 @@ impl<T> Arc<T> {
     /// ```
     #[inline]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
-        todo!()
+        if this.is_unique() {
+            unsafe {
+                Some(Arc::get_mut_unchecked(this))
+            }    
+        } else {
+            None
+        }
     }
 
     // Used in `get_mut` and `make_mut` to check if the given `Arc` is the unique reference to the
     // underlying data.
     #[inline]
     fn is_unique(&mut self) -> bool {
-        todo!()
+        Arc::count(&self) == 1
     }
 
     /// Returns a mutable reference into the given `Arc` without any check.
@@ -149,7 +156,7 @@ impl<T> Arc<T> {
     /// ```
     #[inline]
     pub fn count(this: &Self) -> usize {
-        todo!()
+        unsafe{(*this.ptr.as_ref()).count.load(Ordering::Acquire)}
     }
 
     #[inline]
@@ -200,7 +207,13 @@ impl<T> Arc<T> {
     /// ```
     #[inline]
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
-        todo!()
+        if this.inner().count.compare_exchange(1, 0 , Ordering::Acquire, Ordering::Acquire).is_err() {
+            return Err(this)
+        }
+
+        let value = unsafe {Box::from_raw(this.ptr.as_ptr())};
+        std::mem::forget(this);
+        return Ok(value.data)
     }
 }
 
@@ -232,7 +245,13 @@ impl<T: Clone> Arc<T> {
     /// ```
     #[inline]
     pub fn make_mut(this: &mut Self) -> &mut T {
-        todo!()
+        if this.inner().count.compare_exchange(1, 0, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            // Another strong pointer exists; clone
+            *this = Arc::new((**this).clone());
+        } else {
+            this.inner().count.store(1, Ordering::Release);
+        }
+        unsafe { Self::get_mut_unchecked(this) }
     }
 }
 
@@ -257,7 +276,12 @@ impl<T> Clone for Arc<T> {
     /// ```
     #[inline]
     fn clone(&self) -> Arc<T> {
-        todo!()
+        let value = unsafe{ &mut (*self.ptr.as_ptr()) };
+        if value.count.load(Ordering::Acquire) == MAX_REFCOUNT {
+            panic!();
+        }
+        value.count.fetch_add(1, Ordering::Release);
+        Arc::from_inner(self.ptr)
     }
 }
 
@@ -296,7 +320,12 @@ impl<T> Drop for Arc<T> {
     /// drop(foo2);   // Prints "dropped!"
     /// ```
     fn drop(&mut self) {
-        todo!()
+        if self.inner().count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            unsafe { 
+                std::ptr::drop_in_place(Self::get_mut_unchecked(self)); 
+                std::alloc::dealloc(self.ptr.cast().as_ptr(), std::alloc::Layout::for_value(self.ptr.as_ref()));
+            };
+        }
     }
 }
 
