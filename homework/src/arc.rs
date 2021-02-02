@@ -322,7 +322,10 @@ impl<T> Drop for Arc<T> {
     fn drop(&mut self) {
         if self.inner().count.fetch_sub(1, Ordering::AcqRel) == 1 {
             unsafe { 
-                std::ptr::drop_in_place(Self::get_mut_unchecked(self)); 
+                // Drop the Pointer
+                std::ptr::drop_in_place(self.ptr.as_ptr()); 
+
+                // Deallocate the memory
                 std::alloc::dealloc(self.ptr.cast().as_ptr(), std::alloc::Layout::for_value(self.ptr.as_ref()));
             };
         }
