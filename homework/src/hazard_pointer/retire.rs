@@ -34,22 +34,13 @@ impl<'s> Retirees<'s> {
             drop(Box::from_raw(data as *mut T))
         }
 
-        self.inner
-            .push((pointer.with_tag(0).into_usize(), free::<T>));
+        todo!()
     }
 
     /// Free the pointers that are `retire`d by the current thread and not `protect`ed by any other
     /// threads.
     pub fn collect(&mut self) {
-        fence(Ordering::SeqCst);
-
-        let all_hazards = self.hazards.all_hazards();
-        self.inner.retain(|(data, func_free)| {
-            all_hazards.contains(data) || {
-                unsafe { func_free(*data) };
-                false
-            }
-        });
+        todo!()
     }
 }
 
