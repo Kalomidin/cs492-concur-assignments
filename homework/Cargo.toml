@@ -25,3 +25,7 @@ loom = { git = "https://github.com/tomtomjhj/loom", branch = "fence", optional =
 rand = "0.7.3"
 regex = "1.4.2"
 static_assertions = "1.1.0"
+
+[[bin]]
+name = "sample"
+path = "src/bin/sample.rs"

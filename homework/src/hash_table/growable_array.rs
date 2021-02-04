@@ -170,10 +170,33 @@ impl Debug for Segment {
     }
 }
 
+impl Drop for Segment {
+    fn drop(&mut self) {
+        let guard = unsafe { unprotected() };
+
+        for inner in self.inner.iter_mut() {
+            let atomic_segment = unsafe { &*(inner as *const _ as *const Atomic<Segment>) };
+            let mut atomic_value = atomic_segment.load(Ordering::Acquire, guard);
+            if atomic_value.is_null() {
+                return;
+            }
+            let value = unsafe { atomic_value.deref_mut() };
+            drop(value);
+            drop(inner);
+        }
+    }
+}
+
 impl<T> Drop for GrowableArray<T> {
     /// Deallocate segments, but not the individual elements.
     fn drop(&mut self) {
-        todo!()
+        let guard = unsafe { unprotected() };
+        let mut root = self.root.load(Ordering::Acquire, guard);
+        if root.is_null() {
+            return;
+        }
+        let value = unsafe { root.deref_mut() };
+        drop(value);
     }
 }
 
@@ -195,6 +218,72 @@ impl<T> GrowableArray<T> {
     /// Returns the reference to the `Atomic` pointer at `index`. Allocates new segments if
     /// necessary.
     pub fn get(&self, mut index: usize, guard: &Guard) -> &Atomic<T> {
-        todo!()
+        let mut parent = self.root.load(Ordering::Acquire, &guard);
+
+        // Increase the height until it is necessary to do so
+        while {
+            // Update values
+            parent = self.root.load(Ordering::Acquire, &guard);
+            let length = parent.tag() * SEGMENT_LOGSIZE;
+            length < index || length == 0
+        } {
+            // Insert the new segment
+            let mut new_segment = Segment::new();
+            new_segment[0] = AtomicUsize::new(parent.into_usize());
+            let owned_new_segment = Owned::new(new_segment).with_tag(parent.tag() + 1);
+            match self
+                .root
+                .compare_and_set(parent, owned_new_segment, Ordering::Release, &guard)
+            {
+                Ok(_) => (),
+                Err(e) => drop(e.new),
+            };
+        }
+
+        let mut current_height = parent.tag();
+        let mut current_segment: Atomic<Segment> = Atomic::from(parent);
+
+        // Loop until you find the entry in the lowest depth of the tree, which has height 1
+        loop {
+            let segment_index =
+                (index >> ((current_height - 1) * SEGMENT_LOGSIZE)) & (SEGMENT_LOGSIZE - 1);
+            let next_current_segment = unsafe {
+                current_segment
+                    .load(Ordering::Acquire, &guard)
+                    .deref()
+                    .get_unchecked(segment_index)
+            };
+            if current_height == 1 {
+                return unsafe { &*(next_current_segment as *const _ as *const Atomic<T>) };
+            }
+            let next_usize_value = next_current_segment.load(Ordering::Acquire);
+            let next_current_segment_shared = unsafe { Shared::from_usize(next_usize_value) };
+
+            // Insert empty Segment if necessary
+            if next_current_segment_shared.is_null() {
+                let new_segment = Segment::new();
+                let owned_new_segment = Owned::new(new_segment);
+                let new_segment_usize = owned_new_segment.into_usize();
+                match next_current_segment.compare_and_swap(
+                    next_usize_value,
+                    new_segment_usize,
+                    Ordering::AcqRel,
+                ) {
+                    // If successfully updated the next current segment from none to new segment usize, set the current segment as next current segment
+                    value if value == next_usize_value => {
+                        current_segment =
+                            unsafe { Atomic::from(Shared::from_usize(new_segment_usize)) };
+                    }
+                    _value => {
+                        // Do nothing since value was inserted by some other thread
+                    }
+                }
+            }
+            // If the segment exists, continue until height becomes 1
+            else {
+                current_segment = Atomic::from(next_current_segment_shared);
+                current_height -= 1;
+            }
+        }
     }
 }

@@ -46,25 +46,25 @@ impl<'l, T: Ord> Cursor<'l, T> {
             return false;
         }
 
-        let is_equal = unsafe {(***cursor).data.cmp(key)};
+        let is_equal = unsafe { (***cursor).data.cmp(key) };
         match is_equal {
             Ordering::Equal => return true,
             Ordering::Greater => return false,
-            _ =>(),
+            _ => (),
         }
 
-        let mut cursor = unsafe {(***cursor).next.lock().unwrap()};
+        let mut cursor = unsafe { (***cursor).next.lock().unwrap() };
 
         let response = loop {
             if (cursor).is_null() {
-                break(false)
+                break (false);
             }
-            let is_equal = unsafe {(**cursor).data.cmp(key)};
+            let is_equal = unsafe { (**cursor).data.cmp(key) };
             match is_equal {
                 Ordering::Equal => break (true),
-                Ordering::Greater => break(false),
+                Ordering::Greater => break (false),
                 Ordering::Less => {
-                    cursor = unsafe {(**cursor).next.lock().unwrap()};
+                    cursor = unsafe { (**cursor).next.lock().unwrap() };
                 }
             }
         };
@@ -99,16 +99,16 @@ impl<T: Ord + std::fmt::Debug> OrderedListSet<T> {
 
     /// Insert a key to the set. If the set already has the key, return the provided key in `Err`.
     pub fn insert(&self, key: T) -> Result<(), T> {
-            let (contains, mut cursor) = self.find(&key);
-            if contains {
-                return Err(key);
-            }
+        let (contains, mut cursor) = self.find(&key);
+        if contains {
+            return Err(key);
+        }
 
-            let next_node = *cursor.0;
-            let new_node = Node::new(key, next_node);
-            (*cursor.0) = new_node;
+        let next_node = *cursor.0;
+        let new_node = Node::new(key, next_node);
+        (*cursor.0) = new_node;
 
-            Ok(())
+        Ok(())
     }
 
     /// Remove the key from the set and return it.
@@ -141,20 +141,18 @@ impl<'l, T> Iterator for Iter<'l, T> {
     fn next(&mut self) -> Option<Self::Item> {
         let (mutex_value, is_owned) = match &self.0 {
             None => return None,
-            Some(mutex_value) => {
-                (mutex_value, self.1)
-            }
+            Some(mutex_value) => (mutex_value, self.1),
         };
 
         if (*mutex_value).is_null() {
-            return None
+            return None;
         }
 
-        let node = unsafe { & *(*(*mutex_value)) };
+        let node = unsafe { &*(*(*mutex_value)) };
 
         if is_owned {
             self.1 = false;
-            return Some(& node.data);
+            return Some(&node.data);
         }
 
         let next_value = node.next.lock().unwrap();
@@ -163,10 +161,10 @@ impl<'l, T> Iterator for Iter<'l, T> {
             self.0 = None;
             None
         } else {
-            let next_node = unsafe { & *(*next_value) };
+            let next_node = unsafe { &*(*next_value) };
             self.0 = Some(next_value);
 
-            Some(& next_node.data)
+            Some(&next_node.data)
         }
     }
 }
@@ -214,12 +212,12 @@ impl<T> Drop for OrderedListSet<T> {
     fn drop(&mut self) {
         let mut_mutex = self.head.get_mut().unwrap();
         loop {
-            if (*mut_mutex) .is_null() {
+            if (*mut_mutex).is_null() {
                 return;
             }
-                let mutex_box = unsafe{Box::from_raw(*mut_mutex)};
-                let next = (mutex_box).next;
-                (*mut_mutex) = next.into_inner().unwrap();
+            let mutex_box = unsafe { Box::from_raw(*mut_mutex) };
+            let next = (mutex_box).next;
+            (*mut_mutex) = next.into_inner().unwrap();
         }
     }
 }

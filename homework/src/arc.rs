@@ -3,11 +3,11 @@
 //! See the `Arc` documentation for more details and specification.
 
 use core::panic;
-use std::{borrow::Borrow, fmt};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::ptr::NonNull;
+use std::{borrow::Borrow, fmt};
 
 #[cfg(feature = "check-loom")]
 use loom::sync::atomic::{AtomicUsize, Ordering};
@@ -93,9 +93,7 @@ impl<T> Arc<T> {
     #[inline]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
         if this.is_unique() {
-            unsafe {
-                Some(Arc::get_mut_unchecked(this))
-            }    
+            unsafe { Some(Arc::get_mut_unchecked(this)) }
         } else {
             None
         }
@@ -156,7 +154,7 @@ impl<T> Arc<T> {
     /// ```
     #[inline]
     pub fn count(this: &Self) -> usize {
-        unsafe{(*this.ptr.as_ref()).count.load(Ordering::Acquire)}
+        unsafe { (*this.ptr.as_ref()).count.load(Ordering::Acquire) }
     }
 
     #[inline]
@@ -207,13 +205,18 @@ impl<T> Arc<T> {
     /// ```
     #[inline]
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
-        if this.inner().count.compare_exchange(1, 0 , Ordering::Acquire, Ordering::Acquire).is_err() {
-            return Err(this)
+        if this
+            .inner()
+            .count
+            .compare_exchange(1, 0, Ordering::Acquire, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(this);
         }
 
-        let value = unsafe {Box::from_raw(this.ptr.as_ptr())};
+        let value = unsafe { Box::from_raw(this.ptr.as_ptr()) };
         std::mem::forget(this);
-        return Ok(value.data)
+        return Ok(value.data);
     }
 }
 
@@ -245,7 +248,12 @@ impl<T: Clone> Arc<T> {
     /// ```
     #[inline]
     pub fn make_mut(this: &mut Self) -> &mut T {
-        if this.inner().count.compare_exchange(1, 0, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        if this
+            .inner()
+            .count
+            .compare_exchange(1, 0, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             // Another strong pointer exists; clone
             *this = Arc::new((**this).clone());
         } else {
@@ -276,7 +284,7 @@ impl<T> Clone for Arc<T> {
     /// ```
     #[inline]
     fn clone(&self) -> Arc<T> {
-        let value = unsafe{ &mut (*self.ptr.as_ptr()) };
+        let value = unsafe { &mut (*self.ptr.as_ptr()) };
         if value.count.load(Ordering::Acquire) == MAX_REFCOUNT {
             panic!();
         }
@@ -321,12 +329,15 @@ impl<T> Drop for Arc<T> {
     /// ```
     fn drop(&mut self) {
         if self.inner().count.fetch_sub(1, Ordering::AcqRel) == 1 {
-            unsafe { 
+            unsafe {
                 // Drop the Pointer
-                std::ptr::drop_in_place(self.ptr.as_ptr()); 
+                std::ptr::drop_in_place(self.ptr.as_ptr());
 
                 // Deallocate the memory
-                std::alloc::dealloc(self.ptr.cast().as_ptr(), std::alloc::Layout::for_value(self.ptr.as_ref()));
+                std::alloc::dealloc(
+                    self.ptr.cast().as_ptr(),
+                    std::alloc::Layout::for_value(self.ptr.as_ref()),
+                );
             };
         }
     }
