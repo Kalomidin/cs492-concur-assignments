@@ -218,22 +218,30 @@ impl<T> GrowableArray<T> {
     /// Returns the reference to the `Atomic` pointer at `index`. Allocates new segments if
     /// necessary.
     pub fn get(&self, mut index: usize, guard: &Guard) -> &Atomic<T> {
-        let mut parent = self.root.load(Ordering::Acquire, &guard);
+        let mut parent = self.root.load(Ordering::Acquire, guard);
 
         // Increase the height until it is necessary to do so
         while {
             // Update values
-            parent = self.root.load(Ordering::Acquire, &guard);
-            let length = parent.tag() * SEGMENT_LOGSIZE;
-            length < index || length == 0
+            parent = self.root.load(Ordering::Acquire, guard);
+
+            // Get the maximum key of the segment
+            let length = if parent.tag() > 6 {
+                    usize::MAX
+                } else {
+                    1 << SEGMENT_LOGSIZE * parent.tag()
+                };
+            
+            // Compare with the given idx
+            length <= index || parent.tag() == 0
         } {
-            // Insert the new segment
+            // Insert the new segment since idx bigger than max key
             let mut new_segment = Segment::new();
-            new_segment[0] = AtomicUsize::new(parent.into_usize());
-            let owned_new_segment = Owned::new(new_segment).with_tag(parent.tag() + 1);
+            new_segment.inner[0] = AtomicUsize::new(parent.into_usize());
+            let owned_new_segment = Owned::new(new_segment);
             match self
                 .root
-                .compare_and_set(parent, owned_new_segment, Ordering::Release, &guard)
+                .compare_and_set(parent, owned_new_segment.with_tag(parent.tag() + 1), Ordering::Release, guard)
             {
                 Ok(_) => (),
                 Err(e) => drop(e.new),
@@ -245,45 +253,55 @@ impl<T> GrowableArray<T> {
 
         // Loop until you find the entry in the lowest depth of the tree, which has height 1
         loop {
+            assert!( current_height >= 1, "Current height is: {:?}", current_height);
             let segment_index =
-                (index >> ((current_height - 1) * SEGMENT_LOGSIZE)) & (SEGMENT_LOGSIZE - 1);
-            let next_current_segment = unsafe {
+                (index >> ((current_height - 1) * SEGMENT_LOGSIZE)) & ((1<< SEGMENT_LOGSIZE) - 1);
+            
+            // Get the index of the segment for the given index
+            let current_segment_index = unsafe {
                 current_segment
-                    .load(Ordering::Acquire, &guard)
+                    .load(Ordering::Acquire, guard)
                     .deref()
                     .get_unchecked(segment_index)
             };
+
+            // If the latest height, return
             if current_height == 1 {
-                return unsafe { &*(next_current_segment as *const _ as *const Atomic<T>) };
+                return unsafe { &*(current_segment_index as *const _ as *const Atomic<T>) };
             }
-            let next_usize_value = next_current_segment.load(Ordering::Acquire);
-            let next_current_segment_shared = unsafe { Shared::from_usize(next_usize_value) };
+
+
+            let segment_idx_usize = current_segment_index.load(Ordering::Acquire);
+            let segment_idx_shared = unsafe { Shared::from_usize(segment_idx_usize) };
 
             // Insert empty Segment if necessary
-            if next_current_segment_shared.is_null() {
+            if segment_idx_shared.is_null() {
+                // Creating a new segment
                 let new_segment = Segment::new();
                 let owned_new_segment = Owned::new(new_segment);
+                
+                // Insert the new segment
                 let new_segment_usize = owned_new_segment.into_usize();
-                match next_current_segment.compare_and_swap(
-                    next_usize_value,
+                if current_segment_index.compare_and_swap(
+                    segment_idx_usize,
                     new_segment_usize,
                     Ordering::AcqRel,
-                ) {
-                    // If successfully updated the next current segment from none to new segment usize, set the current segment as next current segment
-                    value if value == next_usize_value => {
+                ) == segment_idx_usize {
                         current_segment =
-                            unsafe { Atomic::from(Shared::from_usize(new_segment_usize)) };
+                            unsafe { 
+                                current_height -= 1;
+                                Atomic::from(Shared::from_usize(new_segment_usize)) };
+                    } else {
+                        // Do nothing
+                        // Maybe drop the segment??
                     }
-                    _value => {
-                        // Do nothing since value was inserted by some other thread
-                    }
-                }
             }
             // If the segment exists, continue until height becomes 1
             else {
-                current_segment = Atomic::from(next_current_segment_shared);
+                current_segment = Atomic::from(segment_idx_shared);
                 current_height -= 1;
             }
         }
+
     }
 }

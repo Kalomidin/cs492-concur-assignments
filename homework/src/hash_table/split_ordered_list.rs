@@ -46,6 +46,7 @@ impl<V> SplitOrderedList<V> {
     /// Creates a cursor and moves it to the bucket for the given index.  If the bucket doesn't
     /// exist, recursively initializes the buckets.
     fn lookup_bucket<'s>(&'s self, index: usize, guard: &'s Guard) -> Cursor<'s, usize, Option<V>> {
+        
         let bucket_atomic_value = self.buckets.get(index, guard);
         let bucket_shared_value = bucket_atomic_value.load(Ordering::Acquire, guard);
         if !bucket_shared_value.is_null() {
@@ -60,13 +61,14 @@ impl<V> SplitOrderedList<V> {
             if parent_node > index {
                 parent_node = parent_node >> 1;
             } else {
-                break parent_node;
+                break index - parent_node;
             }
         };
-        let mut list_cursor = if list_idx == index {
+        println!("Lopping with list idx: {:?}, index: {:?}", list_idx, index);
+        let mut list_cursor = if list_idx == 0 {
             self.list.head(guard)
         } else {
-            self.lookup_bucket(index, guard)
+            self.lookup_bucket(list_idx, guard)
         };
 
         let mut new_node = Owned::new(Node::new(index, None));
@@ -109,14 +111,21 @@ impl<V> SplitOrderedList<V> {
         key: &usize,
         guard: &'s Guard,
     ) -> (usize, bool, Cursor<'s, usize, Option<V>>) {
+        
         let key = key.to_owned();
-        let mut cursor = self.lookup_bucket(key, guard);
         let size = self.size.load(Ordering::Acquire);
+        println!("Looking for the bucket");
 
+        // Take the index since size * 2 > count
+        let index = key % size;
+        let cursor = self.lookup_bucket(index, guard);
+        let size = self.size.load(Ordering::Acquire);
+        println!("Finished looking to the bucket: {:?}", cursor.lookup().is_none());
         loop {
-            match cursor.find_harris(&key, guard) {
-                Ok(response) => return (size, response, cursor),
-                Err(_) => (),
+            let mut my_cursor = cursor.clone();
+            match my_cursor.find_harris(&key, guard) {
+                Ok(found) => break (size, found, my_cursor),
+                Err(_) => ()
             }
         }
     }
@@ -128,6 +137,7 @@ impl<V> SplitOrderedList<V> {
 
 impl<V> NonblockingMap<usize, V> for SplitOrderedList<V> {
     fn lookup<'a>(&'a self, key: &usize, guard: &'a Guard) -> Option<&'a V> {
+        
         Self::assert_valid_key(*key);
         let (_, found, cursor) = self.find(key, guard);
         if !found {
@@ -137,10 +147,12 @@ impl<V> NonblockingMap<usize, V> for SplitOrderedList<V> {
     }
 
     fn insert(&self, key: &usize, value: V, guard: &Guard) -> Result<(), V> {
+        
         Self::assert_valid_key(*key);
         let mut node = Owned::new(Node::new(key.to_owned(), Some(value)));
-
+        println!("Lopping");
         loop {
+            println!("Searching for the key");
             let (size, found, mut cursor) = self.find(key, guard);
             if found {
                 let value = node.into_box().into_value().unwrap();
@@ -162,6 +174,7 @@ impl<V> NonblockingMap<usize, V> for SplitOrderedList<V> {
     }
 
     fn delete<'a>(&'a self, key: &usize, guard: &'a Guard) -> Result<&'a V, ()> {
+        
         Self::assert_valid_key(*key);
         let (_size, found, cursor) = self.find(key, guard);
         if !found {

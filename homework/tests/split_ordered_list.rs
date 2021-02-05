@@ -12,7 +12,7 @@ pub fn smoke() {
     assert_eq!(list.insert(&37, 37, &guard), Ok(()));
     assert_eq!(list.lookup(&42, &guard), None);
     assert_eq!(list.lookup(&37, &guard), Some(&37));
-
+    
     assert_eq!(list.insert(&42, 42, &guard), Ok(()));
     assert_eq!(list.lookup(&42, &guard), Some(&42));
     assert_eq!(list.lookup(&37, &guard), Some(&37));

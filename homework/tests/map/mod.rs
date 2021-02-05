@@ -42,13 +42,13 @@ pub fn stress_sequential<
             Ops::LookupSome => {
                 if let Some(key) = hashmap.keys().choose(&mut rng) {
                     println!("iteration {}: lookup({:?}) (existing)", i, key);
-                    assert_eq!(map.lookup(key), hashmap.get(key));
+                    assert_eq!(map.lookup(key), hashmap.get(key), " Falied in {:?}", op);
                 }
             }
             Ops::LookupNone => {
                 let key = K::rand_gen(&mut rng);
                 println!("iteration {}: lookup({:?}) (non-existing)", i, key);
-                assert_eq!(map.lookup(&key), hashmap.get(&key));
+                assert_eq!(map.lookup(&key), hashmap.get(&key), " Falied in {:?}", op);
             }
             Ops::Insert => {
                 let key = K::rand_gen(&mut rng);
@@ -61,13 +61,13 @@ pub fn stress_sequential<
                 let key = hashmap.keys().choose(&mut rng).map(|k| k.clone());
                 if let Some(key) = key {
                     println!("iteration {}: delete({:?}) (existing)", i, key);
-                    assert_eq!(map.delete(&key), hashmap.remove(&key).ok_or(()));
+                    assert_eq!(map.delete(&key), hashmap.remove(&key).ok_or(()), " Falied in {:?}", op);
                 }
             }
             Ops::DeleteNone => {
                 let key = K::rand_gen(&mut rng);
                 println!("iteration {}: delete({:?}) (non-existing)", i, key);
-                assert_eq!(map.delete(&key), hashmap.remove(&key).ok_or(()));
+                assert_eq!(map.delete(&key), hashmap.remove(&key).ok_or(()), " Falied in {:?}", op);
             }
         }
     }
