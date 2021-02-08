@@ -8,6 +8,9 @@ use lockfree::list::{Cursor, List, Node};
 use super::growable_array::GrowableArray;
 use crate::map::NonblockingMap;
 
+
+const HI_MASK: usize = 0x8000000000000000usize;
+
 /// Lock-free map from `usize` in range [0, 2^63-1] to `V`.
 ///
 /// NOTE: We don't care about hashing in this homework for simplicity.
@@ -35,100 +38,110 @@ impl<V> Default for SplitOrderedList<V> {
 }
 
 impl<V> SplitOrderedList<V> {
-    /// `size` is doubled when `count > size * LOAD_FACTOR`.
-    const LOAD_FACTOR: usize = 2;
+       /// `size` is doubled when `count > size * LOAD_FACTOR`.
+       const LOAD_FACTOR: usize = 2;
+   
+       /// Creates a new split ordered list.
+       pub fn new() -> Self {
+           Self::default()
+       }
+   
+       /// Creates a cursor and moves it to the bucket for the given index.  If the bucket doesn't
+       /// exist, recursively initializes the buckets.
+       fn lookup_bucket<'s>(&'s self, index: usize, guard: &'s Guard) -> Cursor<'s, usize, Option<V>> {
+           let key = index.reverse_bits();
 
-    /// Creates a new split ordered list.
-    pub fn new() -> Self {
-        Self::default()
-    }
+           let bucket = self.buckets.get(key, guard);
+           let shared_bucket = bucket.load(Ordering::Acquire, guard);
+   
+           if !shared_bucket.is_null() {
+               return unsafe {
+                   Cursor::from_raw(
+                       bucket,
+                       shared_bucket.as_raw()
+                   )
+               };
+           }
+   
+           let parent = {
+               let mut size = self.size.load(Ordering::Acquire);
+               while {
+                size = size >> 1;
+                size > index
+               } {};
+               index - size
+           };
 
-    /// Creates a cursor and moves it to the bucket for the given index.  If the bucket doesn't
-    /// exist, recursively initializes the buckets.
-    fn lookup_bucket<'s>(&'s self, index: usize, guard: &'s Guard) -> Cursor<'s, usize, Option<V>> {
-        
-        let bucket_atomic_value = self.buckets.get(index, guard);
-        let bucket_shared_value = bucket_atomic_value.load(Ordering::Acquire, guard);
-        if !bucket_shared_value.is_null() {
-            return unsafe { Cursor::from_raw(bucket_atomic_value, bucket_shared_value.as_raw()) };
-        }
+           // Get the cursor from the list and insert node if necessary
+           let cursor =
+               if parent == 0
+               { self.list.head(guard) } else
+               { self.lookup_bucket(parent, guard) };
+   
+           let mut sentinel_node = Owned::new(
+               Node::new(key, None)
+           );
+   
+           let inserted_cursor = loop {
+               let (is_there, mut my_cursor) = loop {
+                   let mut my_cursor = cursor.clone();
+   
+                   match my_cursor.find_harris(&key, guard) {
+                       Ok(found) => break (found, my_cursor),
+                       Err(_) => ()
+                   }
+               };
+   
+               if is_there {
+                   drop(sentinel_node);
+                   break my_cursor;
+               }
+   
+               match my_cursor.insert(sentinel_node, guard) {
+                   Ok(_) => break my_cursor,
+                   Err(e) => { sentinel_node = e; }
+               };
+           };
+           
 
-        // Inser to the list if necessary and create empty entries to \
-        // make same as bucket
-        let mut parent_node = self.size.load(Ordering::Acquire);
-        let list_idx = loop {
-            // Search for the value
-            if parent_node > index {
-                parent_node = parent_node >> 1;
-            } else {
-                break index - parent_node;
-            }
-        };
-        println!("Lopping with list idx: {:?}, index: {:?}", list_idx, index);
-        let mut list_cursor = if list_idx == 0 {
-            self.list.head(guard)
-        } else {
-            self.lookup_bucket(list_idx, guard)
-        };
-
-        let mut new_node = Owned::new(Node::new(index, None));
-
-        let updated_list_cursor = loop {
-            // Find the given value
-            let is_there = loop {
-                match list_cursor.find_harris(&index, guard) {
-                    Ok(value) => break value,
-                    Err(_) => (),
-                }
-            };
-            if is_there {
-                drop(new_node);
-                break list_cursor;
-            }
-            match list_cursor.insert(new_node, guard) {
-                Ok(()) => break list_cursor,
-                Err(e) => new_node = e,
-            };
-        };
-
-        // Set the cursor curr value in the Bucket
-        match bucket_atomic_value.compare_and_set(
-            Shared::null(),
-            updated_list_cursor.curr(),
-            Ordering::Acquire,
-            guard,
-        ) {
-            Ok(response) => drop(response),
-            Err(e) => drop(e.new),
-        };
-        updated_list_cursor
-    }
-
-    /// Moves the bucket cursor returned from `lookup_bucket` to the position of the given key.
-    /// Returns `(size, found, cursor)`
-    fn find<'s>(
-        &'s self,
-        key: &usize,
-        guard: &'s Guard,
-    ) -> (usize, bool, Cursor<'s, usize, Option<V>>) {
-        
-        let key = key.to_owned();
-        let size = self.size.load(Ordering::Acquire);
-        println!("Looking for the bucket");
-
-        // Take the index since size * 2 > count
-        let index = key % size;
-        let cursor = self.lookup_bucket(index, guard);
-        let size = self.size.load(Ordering::Acquire);
-        println!("Finished looking to the bucket: {:?}", cursor.lookup().is_none());
-        loop {
-            let mut my_cursor = cursor.clone();
-            match my_cursor.find_harris(&key, guard) {
-                Ok(found) => break (size, found, my_cursor),
-                Err(_) => ()
-            }
-        }
-    }
+           // Set the Cursor to the bucket
+           match bucket.compare_and_set(
+               Shared::null(),
+               inserted_cursor.curr(),
+               Ordering::Release,
+               guard
+           ) {
+               Err(e) => drop(e.new),
+               _ => ()
+           };
+   
+           inserted_cursor
+       }
+   
+       /// Moves the bucket cursor returned from `lookup_bucket` to the position of the given key.
+       /// Returns `(size, found, cursor)`
+       fn find<'s>(
+           &'s self,
+           key: &usize,
+           guard: &'s Guard,
+       ) -> (usize, bool, Cursor<'s, usize, Option<V>>) {
+           let key = key.to_owned();
+           let size = self.size.load(Ordering::Acquire);
+   
+           // Take the index since size * 2 > count
+           let index = key % size;
+           let cursor = self.lookup_bucket(index, guard);
+           let size = self.size.load(Ordering::Acquire);
+           let converted_key = get_converted_key(&key);
+           loop {
+               let mut my_cursor = cursor.clone();
+               match my_cursor.find_harris(&converted_key, guard) {
+                   Ok(found) => break (size, found, my_cursor),
+                   Err(_) => ()
+               }
+           }
+   
+       }
 
     fn assert_valid_key(key: usize) {
         assert!(key.leading_zeros() != 0);
@@ -149,10 +162,9 @@ impl<V> NonblockingMap<usize, V> for SplitOrderedList<V> {
     fn insert(&self, key: &usize, value: V, guard: &Guard) -> Result<(), V> {
         
         Self::assert_valid_key(*key);
-        let mut node = Owned::new(Node::new(key.to_owned(), Some(value)));
-        println!("Lopping");
+        let content_key = get_converted_key(key);
+        let mut node = Owned::new(Node::new(content_key, Some(value)));
         loop {
-            println!("Searching for the key");
             let (size, found, mut cursor) = self.find(key, guard);
             if found {
                 let value = node.into_box().into_value().unwrap();
@@ -189,3 +201,5 @@ impl<V> NonblockingMap<usize, V> for SplitOrderedList<V> {
         }
     }
 }
+
+fn get_converted_key(key: &usize) -> usize { (key | HI_MASK ).reverse_bits() }
